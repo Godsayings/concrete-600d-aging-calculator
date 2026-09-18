@@ -16,7 +16,8 @@
   },
 
   "ledger": {
-    "cum_columns":  { "left": "J", "right": "X" },
+    "_note": "temp_columns 指向每日平均温度列；F/G 要填当天平均温度，不要填累计温度列(J/X)",
+    "temp_columns": { "left": "F", "right": "T" },
     "date_columns": { "left": "B", "right": "P" },
     "first_data_row": 6,
     "last_data_row": 27

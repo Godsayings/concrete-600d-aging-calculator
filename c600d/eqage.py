@@ -14,17 +14,19 @@
 ============  ==========================================================
 D 制作日期     ← 台账汇总的「成型日期」
 E 检验日期     ← 台账汇总的「送检日期」
-F 制作日期累计温度值  ← 逐日温度台账里该日的**累计温度列**
-G 检验日期累计温度值  ← 同上
+F 制作日期累计温度值  ← 逐日温度台账里**制作日当天**的平均温度
+G 检验日期累计温度值  ← 逐日温度台账里**检验日当天**的平均温度
 H 600℃·d计算值 = G − F
 I 等效龄期（d） = (送检日期 − 成型日期).days（自然天数）
 ============  ==========================================================
 
 台账里查不到的日期，单元格留空并标黄，便于人工补齐。
 
-> 注意：F/G 取「累计温度列」还是「日均温列」结果差别极大，
-> 由配置项 ``ledger.cum_columns`` 决定；表头文字是台账模板自带的，
-> 与所取列不一致时应以本模块的说明为准。
+> ⚠️ 两处容易搞错的地方：
+> 1. F/G 要填的是**当天平均温度**（逐日温度台账的日均温列，默认左块 F、右块 T），
+>    **不是**累计温度列（J/X）。取错列会得到完全不同的量级。
+> 2. 表格模板的 F/G 表头文字是「制作日期累计温度值 / 检验日期累计温度值」，
+>    与上面第 1 条的口径**不一致**。表头文字是既有模板自带的，以本模块说明为准。
 """
 import datetime
 import io
@@ -61,8 +63,8 @@ DEFAULT_CONFIG = {
     },
     # ---- 逐日温度台账（如 11.12.xlsx）----
     'ledger': {
-        'cum_columns': {               # 数据块 -> 累计温度列
-            'left': 'J', 'right': 'X',
+        'temp_columns': {              # 数据块 -> 该日「平均温度」列
+            'left': 'F', 'right': 'T',
         },
         'date_columns': {              # 数据块 -> 日期列
             'left': 'B', 'right': 'P',
@@ -148,13 +150,17 @@ def discover_sheets(summary_path, cfg):
     return found
 
 
-def read_cum_ledger(ledger_path, cfg):
-    """读逐日温度台账，返回 {日期: 累计温度}。"""
+def read_daily_temp(ledger_path, cfg):
+    """读逐日温度台账，返回 {日期: 当日平均温度}。
+
+    取的是**日均温列**（默认左块 F、右块 T），不是累计温度列。
+    F/G 两列要填「当天平均温度」，所以这里必须用日均温。
+    """
     lc = cfg['ledger']
     book = rawxlsx.read_book(ledger_path)
     out = {}
-    for side in lc['cum_columns']:
-        ccol = rawxlsx.col_index(lc['cum_columns'][side])
+    for side in lc['temp_columns']:
+        tcol = rawxlsx.col_index(lc['temp_columns'][side])
         dcol = rawxlsx.col_index(lc['date_columns'][side])
         for _name, cells in book.items():
             for r in range(lc['first_data_row'], lc['last_data_row'] + 1):
@@ -164,7 +170,7 @@ def read_cum_ledger(ledger_path, cfg):
                 d = parse_date_any(raw_date)
                 if d is None:
                     continue
-                v = cells.get((r, ccol))
+                v = cells.get((r, tcol))
                 if v is None:
                     continue
                 try:
@@ -256,7 +262,7 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
     if not names:
         raise SystemExit('台账汇总里没有找到匹配的 600° 同条件试验台账工作表')
 
-    cum = read_cum_ledger(ledger_path, cfg)
+    daily = read_daily_temp(ledger_path, cfg)
     specs = read_specimens(summary_path, names, cfg)
 
     wb = openpyxl.load_workbook(target_path)
@@ -293,8 +299,8 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
                 r += 1
                 continue
 
-            cF = cum.get(made) if made else None
-            cG = cum.get(sent) if sent else None
+            tF = daily.get(made) if made else None
+            tG = daily.get(sent) if sent else None
             ws.cell(row=r, column=1).value = k + 1
             ws.cell(row=r, column=2).value = rec['part']
             ws.cell(row=r, column=3).value = rec['no']
@@ -308,13 +314,13 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
                 cell.number_format = date_fmt
 
             blanks = []
-            for col, val in ((6, cF), (7, cG)):
+            for col, val in ((6, tF), (7, tG)):
                 if val is None:
                     blanks.append(col)
                 else:
                     ws.cell(row=r, column=col).value = val
-            if cF is not None and cG is not None:
-                ws.cell(row=r, column=8).value = round(cG - cF, 1)
+            if tF is not None and tG is not None:
+                ws.cell(row=r, column=8).value = round(tG - tF, 1)
             else:
                 blanks.append(8)
             if made and sent:
