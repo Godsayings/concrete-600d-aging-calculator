@@ -142,15 +142,19 @@ class TestEqage(unittest.TestCase):
         names = eqage.discover_sheets(self.summary, CFG)
         self.assertEqual(names, ['2#楼600°同条件试验台账'])
 
-    def test_read_daily_temp(self):
-        """取的是日均温列（F/T），不是累计温度列（J/X）。"""
-        daily = eqage.read_daily_temp(self.ledger, CFG)
-        self.assertEqual(daily[BASE], 10.0)                             # 日均温
-        self.assertEqual(daily[BASE + datetime.timedelta(days=1)], -3.0)  # 负温原样保留
-        self.assertEqual(daily[BASE + datetime.timedelta(days=2)], 0.0)
-        self.assertNotEqual(daily[BASE], 10.0 + 3.0, '不应取到累计温度')
-        # 累计温度列在 11-15 是 16.5，日均温是 6.0；必须取到 6.0
-        self.assertEqual(daily[BASE + datetime.timedelta(days=4)], 6.0)
+    def test_read_ledger_series(self):
+        """日均温列与累计温度列分别读出，两者不可混用。"""
+        avg, cum = eqage.read_ledger_series(self.ledger, CFG)
+        self.assertEqual(avg[BASE], 10.0)                                # 日均温
+        self.assertEqual(avg[BASE + datetime.timedelta(days=1)], -3.0)   # 负温原样保留
+        self.assertEqual(avg[BASE + datetime.timedelta(days=2)], 0.0)
+        self.assertEqual(avg[BASE + datetime.timedelta(days=4)], 6.0)
+        # 累计温度列：只增不减，11-15 是 16.5
+        self.assertEqual(cum[BASE], 10.0)
+        self.assertEqual(cum[BASE + datetime.timedelta(days=1)], 10.0)   # 负温冻结
+        self.assertEqual(cum[BASE + datetime.timedelta(days=4)], 20.0)
+        self.assertNotEqual(avg[BASE + datetime.timedelta(days=4)],
+                            cum[BASE + datetime.timedelta(days=4)])
 
     def test_read_specimens(self):
         specs = eqage.read_specimens(self.summary,
@@ -190,12 +194,13 @@ class TestEqage(unittest.TestCase):
         self.assertEqual(cells[(2, 9)], '等效龄期（d）')
         self.assertEqual(cells[(1, 8)], '02-01-C5-001')
 
-        # T-001：制作 11-12（日均温 −3.0），检验 11-20（日均温 9.0）
-        #   → F=−3.0、G=9.0、H=12.0、I=8
+        # T-001：制作 11-12，检验 11-20
+        #   F = 制作日日均温 = -3.0 ；G = 检验日日均温 = 9.0
+        #   H = 累计温(11-20) − 累计温(11-12) = 62.0 − 10.0 = 52.0 ；I = 8
         self.assertEqual(cells[(3, 3)], 'T-001')
         self.assertEqual(float(cells[(3, 6)]), -3.0)
         self.assertEqual(float(cells[(3, 7)]), 9.0)
-        self.assertEqual(float(cells[(3, 8)]), 12.0)
+        self.assertEqual(float(cells[(3, 8)]), 52.0)
         self.assertEqual(float(cells[(3, 9)]), 8)
 
         # T-002：制作 11-13（日均温 0.0），检验 12-01 超出温度范围 → G/H 留空，I = 18
@@ -223,24 +228,23 @@ class TestEqage(unittest.TestCase):
             s1_before)
         self.assertEqual(after['Sheet1']['C3'].value, '旧数据')
 
-    def test_in_range_dates_compute_H(self):
-        """两个日期都落在温度范围内时，H = 检验日日均温 − 制作日日均温。"""
-        daily = eqage.read_daily_temp(self.ledger, CFG)
-        d1 = datetime.date(2025, 11, 12)     # 日均温 −3.0
-        d2 = datetime.date(2025, 11, 18)     # 日均温 5.0
-        self.assertEqual(daily[d1], -3.0)
-        self.assertEqual(daily[d2], 5.0)
-        self.assertAlmostEqual(round(daily[d2] - daily[d1], 1), 8.0)
+    def test_H_is_cumulative_difference(self):
+        """H = 累计温(检验日) − 累计温(制作日)，取自累计温度列。"""
+        avg, cum = eqage.read_ledger_series(self.ledger, CFG)
+        d1 = datetime.date(2025, 11, 12)     # 累计 10.0
+        d2 = datetime.date(2025, 11, 18)     # 累计 45.5
+        self.assertEqual(cum[d1], 10.0)
+        self.assertEqual(cum[d2], 45.5)
+        self.assertAlmostEqual(round(cum[d2] - cum[d1], 1), 35.5)
+        # H 不应等于日均温之差（那样只有 12.0）
+        self.assertNotAlmostEqual(round(avg[d2] - avg[d1], 1), 35.5)
 
-    def test_H_is_not_cumulative(self):
-        """回归测试：早期版本误取累计温度列，H 会得到几百的量级。"""
-        daily = eqage.read_daily_temp(self.ledger, CFG)
-        d1 = datetime.date(2025, 11, 12)
-        d2 = datetime.date(2025, 11, 18)
-        H = round(daily[d2] - daily[d1], 1)
-        self.assertLess(abs(H), 50, 'H 出现了累计温度量级，说明取错列了')
-        # 若误取累计温度列（J），11-18 是 45.5 而非 5.0
-        self.assertNotEqual(daily[d2], 45.5)
+    def test_F_G_are_daily_mean_not_cumulative(self):
+        """F/G 是当天平均温度；若误取累计温度列，量级会从个位数跳到几十上百。"""
+        avg, cum = eqage.read_ledger_series(self.ledger, CFG)
+        for d in (BASE, BASE + datetime.timedelta(days=4)):
+            self.assertLess(abs(avg[d]), 50, 'F/G 出现了累计温度量级，说明取错列了')
+        self.assertGreater(cum[BASE + datetime.timedelta(days=4)], avg[BASE + datetime.timedelta(days=4)])
 
     def test_dry_run_does_not_write(self):
         mtime = os.path.getmtime(self.target)

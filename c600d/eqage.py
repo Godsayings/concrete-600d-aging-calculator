@@ -14,19 +14,25 @@
 ============  ==========================================================
 D 制作日期     ← 台账汇总的「成型日期」
 E 检验日期     ← 台账汇总的「送检日期」
-F 制作日期累计温度值  ← 逐日温度台账里**制作日当天**的平均温度
-G 检验日期累计温度值  ← 逐日温度台账里**检验日当天**的平均温度
-H 600℃·d计算值 = G − F
+F 制作日期累计温度值  ← 逐日温度台账里**制作日当天**的平均温度（日均温列）
+G 检验日期累计温度值  ← 逐日温度台账里**检验日当天**的平均温度（日均温列）
+H 600℃·d计算值 = 累计温度(检验日) − 累计温度(制作日)（累计温度列）
 I 等效龄期（d） = (送检日期 − 成型日期).days（自然天数）
 ============  ==========================================================
 
 台账里查不到的日期，单元格留空并标黄，便于人工补齐。
 
-> ⚠️ 两处容易搞错的地方：
-> 1. F/G 要填的是**当天平均温度**（逐日温度台账的日均温列，默认左块 F、右块 T），
->    **不是**累计温度列（J/X）。取错列会得到完全不同的量级。
-> 2. 表格模板的 F/G 表头文字是「制作日期累计温度值 / 检验日期累计温度值」，
->    与上面第 1 条的口径**不一致**。表头文字是既有模板自带的，以本模块说明为准。
+> ⚠️ **关键：F/G 与 H 取自台账的**不同列**
+>
+> - **F/G** 是「当天平均温度」→ 取**日均温列**（默认左块 `F`、右块 `T`），
+>   量级为 −20~35 ℃。
+> - **H** 是「两个日期的累计温度之差」→ 取**累计温度列**（默认左块 `J`、右块 `X`），
+>   量级为几十到几千 ℃·d。
+>
+> 两者列由配置 `ledger.temp_columns` 与 `ledger.cum_columns` 分别指定，不要混用。
+> 表格模板的 F/G 表头文字写的是「制作日期累计温度值 / 检验日期累计温度值」，
+> 与 F/G 实际填的内容**不一致**（表头是既有模板自带的，不能改）——
+> **以本说明与配置为准，不要只看表头。**
 """
 import datetime
 import io
@@ -63,8 +69,11 @@ DEFAULT_CONFIG = {
     },
     # ---- 逐日温度台账（如 11.12.xlsx）----
     'ledger': {
-        'temp_columns': {              # 数据块 -> 该日「平均温度」列
+        'temp_columns': {              # 数据块 -> 该日「平均温度」列（供 F/G）
             'left': 'F', 'right': 'T',
+        },
+        'cum_columns': {               # 数据块 -> 该日「累计温度」列（供 H）
+            'left': 'J', 'right': 'X',
         },
         'date_columns': {              # 数据块 -> 日期列
             'left': 'B', 'right': 'P',
@@ -150,17 +159,21 @@ def discover_sheets(summary_path, cfg):
     return found
 
 
-def read_daily_temp(ledger_path, cfg):
-    """读逐日温度台账，返回 {日期: 当日平均温度}。
+def read_ledger_series(ledger_path, cfg):
+    """读逐日温度台账，返回 ``(日均温, 累计温度)`` 两个 {日期: 值} 字典。
 
-    取的是**日均温列**（默认左块 F、右块 T），不是累计温度列。
-    F/G 两列要填「当天平均温度」，所以这里必须用日均温。
+    F/G 填的是**当天平均温度**（取日均温列，默认左块 F、右块 T）；
+    H 填的是**两个日期的累计温度之差**（取累计温度列，默认左块 J、右块 X）。
+    两者取自台账的不同列，所以这里要同时读出来。
+
+    同一数据块内同时有日均温和累计温度，因此用 (侧, 行) 连读两列即可。
     """
     lc = cfg['ledger']
     book = rawxlsx.read_book(ledger_path)
-    out = {}
+    avg, cum = {}, {}
     for side in lc['temp_columns']:
         tcol = rawxlsx.col_index(lc['temp_columns'][side])
+        ccol = rawxlsx.col_index(lc['cum_columns'][side])
         dcol = rawxlsx.col_index(lc['date_columns'][side])
         for _name, cells in book.items():
             for r in range(lc['first_data_row'], lc['last_data_row'] + 1):
@@ -170,14 +183,19 @@ def read_daily_temp(ledger_path, cfg):
                 d = parse_date_any(raw_date)
                 if d is None:
                     continue
-                v = cells.get((r, tcol))
-                if v is None:
-                    continue
-                try:
-                    out[d] = float(v)
-                except ValueError:
-                    continue
-    return out
+                tv = cells.get((r, tcol))
+                if tv is not None:
+                    try:
+                        avg[d] = float(tv)
+                    except ValueError:
+                        pass
+                cv = cells.get((r, ccol))
+                if cv is not None:
+                    try:
+                        cum[d] = float(cv)
+                    except ValueError:
+                        pass
+    return avg, cum
 
 
 def read_specimens(summary_path, sheet_names, cfg):
@@ -262,7 +280,7 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
     if not names:
         raise SystemExit('台账汇总里没有找到匹配的 600° 同条件试验台账工作表')
 
-    daily = read_daily_temp(ledger_path, cfg)
+    avg, cum = read_ledger_series(ledger_path, cfg)
     specs = read_specimens(summary_path, names, cfg)
 
     wb = openpyxl.load_workbook(target_path)
@@ -299,8 +317,10 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
                 r += 1
                 continue
 
-            tF = daily.get(made) if made else None
-            tG = daily.get(sent) if sent else None
+            tF = avg.get(made) if made else None
+            tG = avg.get(sent) if sent else None
+            cF = cum.get(made) if made else None
+            cG = cum.get(sent) if sent else None
             ws.cell(row=r, column=1).value = k + 1
             ws.cell(row=r, column=2).value = rec['part']
             ws.cell(row=r, column=3).value = rec['no']
@@ -313,14 +333,18 @@ def build(target_path, summary_path, ledger_path, cfg, write=False, backup=None)
                 cell.value = datetime.datetime(sent.year, sent.month, sent.day)
                 cell.number_format = date_fmt
 
+            # F/G 取日均温；H 取两个日期的累计温度之差。缺哪个标黄哪个。
             blanks = []
+            for col, val in ((4, made), (5, sent)):
+                if val is None:
+                    blanks.append(col)
             for col, val in ((6, tF), (7, tG)):
                 if val is None:
                     blanks.append(col)
                 else:
                     ws.cell(row=r, column=col).value = val
-            if tF is not None and tG is not None:
-                ws.cell(row=r, column=8).value = round(tG - tF, 1)
+            if cF is not None and cG is not None:
+                ws.cell(row=r, column=8).value = round(cG - cF, 1)
             else:
                 blanks.append(8)
             if made and sent:
