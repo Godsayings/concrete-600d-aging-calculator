@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.tmp_tests/
+
+# 台账与输出（含工程信息，绝不入库）
+*.xlsx
+*.xls
+*.xlsm
+!tests/sample_temps.csv
+*.备份.*
+*.bak
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+~$*
