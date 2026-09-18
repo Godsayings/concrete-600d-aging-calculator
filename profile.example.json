@@ -1,0 +1,33 @@
+{
+  "_comment": "示例配置，全部为占位值。用法：python -m c600d eqage ... --profile profile.example.json",
+
+  "summary": {
+    "sheet_pattern": "600",
+    "exclude_pattern": null,
+    "header_row": null,
+    "header_keywords": ["试件编号", "浇筑部位"],
+    "columns": {
+      "no":   ["试件编号"],
+      "part": ["浇筑部位"],
+      "made": ["成型日期", "制作日期"],
+      "sent": ["送检日期", "送检时间"]
+    },
+    "required_columns": ["no"]
+  },
+
+  "ledger": {
+    "cum_columns":  { "left": "J", "right": "X" },
+    "date_columns": { "left": "B", "right": "P" },
+    "first_data_row": 6,
+    "last_data_row": 27
+  },
+
+  "target": {
+    "template_sheet": "Sheet1",
+    "keep_sheets": ["Sheet1"],
+    "title": "600°C·d实体检验等效龄期计算表\n表C5-19-2",
+    "data_number": "02-01-C5-001",
+    "date_format": "yyyy/m/d;@",
+    "blank_fill": "FFFF00"
+  }
+}

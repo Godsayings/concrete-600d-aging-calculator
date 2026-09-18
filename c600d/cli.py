@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 """命令行入口。
 
-    python -m c600d.cli --xlsx 台账.xlsx --base 2025-11-11 --dry-run
-    python -m c600d.cli --xlsx 台账.xlsx --base 2025-11-11 --write
+两个子命令：
 
-默认只做核算并打印结果（dry-run），加 --write 才修改文件。
+    # 1) 龄期与累计温度（改写台账本体）
+    python -m c600d aging --xlsx 台账.xlsx --base 2025-11-11 --dry-run
+    python -m c600d aging --xlsx 台账.xlsx --base 2025-11-11 --write
+
+    # 2) 等效龄期计算表（在目标工作簿里建表）
+    python -m c600d eqage --summary 台账汇总.xlsx --ledger 温度台账.xlsx \
+                          --target 目标.xlsx --write
+
+为兼容旧用法，不带子命令时按第 1 种处理：
+    python -m c600d --xlsx 台账.xlsx --base 2025-11-11
+
+默认都只核算打印，加 --write 才修改文件。
 """
 import argparse
-import datetime
 import sys
 
 from . import __version__, calc, config, ledger, writeback
@@ -33,6 +42,16 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'eqage':
+        from . import eqage_cli
+        return eqage_cli.main(argv[1:])
+    if argv and argv[0] == 'aging':
+        argv = argv[1:]
+    return _aging_main(argv)
+
+
+def _aging_main(argv):
     args = build_parser().parse_args(argv)
 
     base_date = config.parse_date(args.base)
